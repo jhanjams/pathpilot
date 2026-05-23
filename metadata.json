@@ -1,0 +1,6 @@
+{
+  "name": "PathPilot",
+  "description": "Turning Skills Into Opportunities - premium SaaS landing page & app shell for skill mapping and career pathfinding.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
