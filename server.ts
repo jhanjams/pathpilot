@@ -1,12 +1,150 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
+import { GoogleGenAI } from "@google/genai";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+// Lazy initialization client getter
+let aiClient: GoogleGenAI | null = null;
+function getGeminiClient(clientApiKey?: string): GoogleGenAI {
+  const key = process.env.GEMINI_API_KEY || clientApiKey;
+  if (!key) {
+    throw new Error("Gemini API Key is not configured. Please save a key in Settings or contact the administrator.");
+  }
+  if (!aiClient || clientApiKey) {
+    aiClient = new GoogleGenAI({
+      apiKey: key,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+  }
+  return aiClient;
+}
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
   app.use(express.json());
+
+  // API Route: AI Career Onboarding Analysis
+  app.post("/api/gemini/analyze", async (req, res) => {
+    try {
+      const { education, interests, skills, experience, opportunities, challenges, apiKey } = req.body;
+      const client = getGeminiClient(apiKey);
+
+      const prompt = `
+You are PathPilot AI, an intelligent AI-powered career navigation assistant designed to help students, graduates, and job seekers.
+
+Please analyze the user's answers to the onboarding questions:
+1. Current Education Level: ${education || "Not specified"}
+2. Interested Fields/Industries: ${interests ? interests.join(", ") : "None specified"}
+3. Current Skills: ${skills ? skills.join(", ") : "None specified"}
+4. Prior Experience, Projects, Certifications, Volunteering: ${experience || "None/Fresher"}
+5. Opportunities Looking For: ${opportunities ? opportunities.join(", ") : "None specified"}
+6. Biggest Career Challenges: ${challenges ? challenges.join(", ") : "None specified"}
+
+According to our guidelines, do NOT give generic answers. Personalize every section heavily based on user skills, education level, and goals. Make sure opportunities are realistic:
+- Suggest beginner-friendly, accessible opportunities if they are a school student (Grade 8-10, Grade 11-12).
+- Suggest growth-focused, skill-building opportunities if they are a college student.
+- Suggest employability-focused, career-starting opportunities if they are a graduate or working professional.
+
+Please generate a comprehensive, highly personalized strategic career assessment report containing EXACTLY these steps:
+
+STEP 1: Profile Breakdown
+Break down their skills, interests, and background strengths. Highlight transferable qualities and strengths.
+
+STEP 2: Suggested Career Paths
+Suggest 5 to 8 specific career paths or job roles they are highly eligible for.
+
+STEP 3: Eligibility & Reason
+For each suggested role, explain clearly and strategically WHY they are suitable based on their existing profile.
+
+STEP 4: Match & Next Actions
+Suggest a series of concrete internships, jobs, freelance gigs, or volunteering projects relevant to their profile.
+
+STEP 5: Skill Gap Analysis
+Identify exact skill gaps for their target path. You MUST format each target using this exact snippet configuration (be sure to include the EXACT percentage suitability format):
+“You are currently [X]% qualified for this role.
+To improve your chances, focus on:
+- [Skill 1]
+- [Skill 2]
+- [Skill 3]”
+
+STEP 6: Recommend Strategic Resources
+Recommend specific certifications, practical projects, webinar topics, or real-world experiences to boost their employability.
+
+STEP 7: Strategic Growth Guidance
+Provide supportive, encouraging, and tactical guidance to maintain momentum and confidence.
+
+Always end the response with this exact quote (do not add any words after it):
+"Your future isn’t random — PathPilot helps you build it strategically."
+`;
+
+      const response = await client.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+      });
+
+      res.json({ analysis: response.text || "Onboarding assessment draft could not be generated." });
+    } catch (err: any) {
+      console.error("Onboarding analysis backend error:", err);
+      res.status(500).json({ error: err.message || "Failed to analyze onboarding answers." });
+    }
+  });
+
+  // API Route: AI Career Coach Chat Proxy
+  app.post("/api/gemini/chat", async (req, res) => {
+    try {
+      const { messages, profile, apiKey } = req.body;
+      const client = getGeminiClient(apiKey);
+      
+      const systemInstruction = `You are PathPilot, a premium AI career coach. User profile summary: name is ${profile?.name || "User"}, type is ${profile?.userType || "Job Seeker"}, target role is "${profile?.targetRole || "SaaS Engineer"}", top skills are [${profile?.skills ? profile.skills.slice(0, 5).join(", ") : "General Engineering"}]. Answer career questions with insight, clarity, and encouragement. Be concise. Always end with: "Your future isn’t random — PathPilot helps you build it strategically." if wrapping up a strategic advice thread. Be supportive, friendly but intelligent, and strategic.`;
+      
+      const contents = messages.map((m: any) => ({
+        role: m.role === "user" ? "user" : "model",
+        parts: [{ text: m.text }]
+      }));
+
+      const response = await client.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: contents,
+        config: {
+          systemInstruction: systemInstruction,
+        }
+      });
+
+      res.json({ reply: response.text || "I was unable to draft a clear recommendation right now." });
+    } catch (err: any) {
+      console.error("Chat backend error:", err);
+      res.status(500).json({ error: err.message || "Failed to process chat query" });
+    }
+  });
+
+  // API Route: AI Weekly Actions/Brief Proxy
+  app.post("/api/gemini/brief", async (req, res) => {
+    try {
+      const { profile, apiKey } = req.body;
+      const client = getGeminiClient(apiKey);
+      
+      const prompt = `You are PathPilot, an AI career advisor. User profile: ${JSON.stringify(profile, null, 0)}. Give exactly 3 sharp, specific career action items for this week. Number them. Be motivating and concrete. Keep total response under 120 words. Do not output anything else. Always conclude with "Your future isn’t random — PathPilot helps you build it strategically."`;
+
+      const response = await client.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+      });
+
+      res.json({ brief: response.text || "Unable to retrieve actions right now." });
+    } catch (err: any) {
+      console.error("Brief backend error:", err);
+      res.status(500).json({ error: err.message || "Failed to generate brief" });
+    }
+  });
 
   // API Route: Get OAuth URL
   app.get("/api/auth/url", (req, res) => {
